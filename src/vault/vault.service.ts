@@ -196,6 +196,11 @@ export class VaultService {
     return this.sign(manager_id, transitKeyPath, data, token);
   }
 
+  async signAsNamedManager(manager_name: string, data: Uint8Array, token: string): Promise<Buffer> {
+    const transitKeyPath: string = this.configService.get<string>('VAULT_TRANSIT_MANAGERS_PATH');
+    return this.sign(manager_name, transitKeyPath, data, token);
+  }
+
   async getUserPublicKey(keyName: string, token: string): Promise<Buffer> {
     const transitKeyPath: string = this.configService.get<string>('VAULT_TRANSIT_USERS_PATH');
 
@@ -207,6 +212,11 @@ export class VaultService {
     const transitKeyPath: string = this.configService.get<string>('VAULT_TRANSIT_MANAGERS_PATH');
 
     return this.getKey(manager_id, transitKeyPath, token);
+  }
+
+  async getNamedManagerPublicKey(manager_name: string, token: string): Promise<Buffer> {
+    const transitKeyPath: string = this.configService.get<string>('VAULT_TRANSIT_MANAGERS_PATH');
+    return this.getKey(manager_name, transitKeyPath, token);
   }
 
   /**

@@ -10,6 +10,8 @@ export class ExceptionsFilter implements ExceptionFilter {
     let status: HttpStatus;
     let message: string | object;
 
+    console.error(exception);
+
     if (exception instanceof HttpException) {
       status = exception.getStatus();
       message = exception.getResponse();

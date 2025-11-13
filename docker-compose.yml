@@ -2,7 +2,7 @@ services:
 
   vault:
     image: hashicorp/vault:latest
-    container_name: vault
+    container_name: proofmint_vault
     ports:
       - "8200:8200"
     restart: unless-stopped
@@ -23,7 +23,7 @@ services:
     image: pawn-dev
     working_dir: /opt/app
     command: sh -c 'yarn && yarn start:dev;'
-    container_name: pawn
+    container_name: proofmint_pawn
     env_file:
       - .env
     volumes:

@@ -74,7 +74,7 @@ docker compose up -d pawn
 Go inside the pawn container with:
 
 ```bash
-docker exec -it pawn ash
+docker exec -it proofmint_pawn ash
 ```
 
 And run the following command:

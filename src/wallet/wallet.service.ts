@@ -7,6 +7,15 @@ import { ConfigService } from '@nestjs/config';
 import { AlgorandEncoder } from '@algorandfoundation/algo-models';
 import { ManagerDetailDto } from './manager-detail.dto';
 import { plainToClass } from 'class-transformer';
+import {
+  AlgoTransferRequestDto,
+  AssetTransferRequestDto,
+  CreateAssetDto as GroupCreateAssetDto,
+  SendGroupDto,
+  User,
+} from './send-group.dto';
+import { SendGroupResponseDto } from './send-group-response.dto';
+import algosdk from 'algosdk';
 @Injectable()
 export class WalletService {
   constructor(
@@ -23,8 +32,8 @@ export class WalletService {
     const algoBalance: bigint = await this.chainService.getAccountBalance(encodedAddress);
     Logger.debug(`User ${user_id} Algo Balance: ${algoBalance}`);
 
-    return { 
-      user_id, 
+    return {
+      user_id,
       public_address: encodedAddress,
       algoBalance: algoBalance.toString(),
     };
@@ -32,18 +41,44 @@ export class WalletService {
 
   async getManagerInfo(vault_token: string): Promise<ManagerDetailDto> {
     const public_address = await this.vaultService.getManagerPublicKey(vault_token);
-    // asset holdings 
-    const account: AssetHolding[] = await this.chainService.getAccountAssetHoldings(new AlgorandEncoder().encodeAddress(public_address));
+    // asset holdings
+    const account: AssetHolding[] = await this.chainService.getAccountAssetHoldings(
+      new AlgorandEncoder().encodeAddress(public_address),
+    );
 
     // Log debug with stringify
     Logger.debug(`Manager account details: ${JSON.stringify(account)}`);
 
-
     // Get Algo Balance
-    const algoBalance: bigint = await this.chainService.getAccountBalance(new AlgorandEncoder().encodeAddress(public_address));
+    const algoBalance: bigint = await this.chainService.getAccountBalance(
+      new AlgorandEncoder().encodeAddress(public_address),
+    );
     Logger.debug(`Manager Algo Balance: ${algoBalance}`);
 
-    return plainToClass(ManagerDetailDto, { 
+    return plainToClass(ManagerDetailDto, {
+      public_address: new AlgorandEncoder().encodeAddress(public_address),
+      assets: account,
+      algoBalance: algoBalance.toString(),
+    });
+  }
+
+  async getNamedManagerInfo(manager_name: string, vault_token: string): Promise<ManagerDetailDto> {
+    const public_address = await this.vaultService.getNamedManagerPublicKey(manager_name, vault_token);
+    // asset holdings
+    const account: AssetHolding[] = await this.chainService.getAccountAssetHoldings(
+      new AlgorandEncoder().encodeAddress(public_address),
+    );
+
+    // Log debug with stringify
+    Logger.debug(`Manager account details: ${JSON.stringify(account)}`);
+
+    // Get Algo Balance
+    const algoBalance: bigint = await this.chainService.getAccountBalance(
+      new AlgorandEncoder().encodeAddress(public_address),
+    );
+    Logger.debug(`Manager Algo Balance: ${algoBalance}`);
+
+    return plainToClass(ManagerDetailDto, {
       public_address: new AlgorandEncoder().encodeAddress(public_address),
       assets: account,
       algoBalance: algoBalance.toString(),
@@ -61,19 +96,17 @@ export class WalletService {
 
   // Get all users
   async getKeys(vault_token: string): Promise<UserInfoResponseDto[]> {
-
     const keys: UserInfoResponseDto[] = (await this.vaultService.getKeys(vault_token)) as UserInfoResponseDto[];
 
     // convert all public keys to algorand address
     keys.map((key) => {
-      
       key.public_address = new AlgorandEncoder().encodeAddress(Buffer.from(key.public_address, 'base64'));
     });
 
     return keys;
   }
   /**
-   * 
+   *
    * Fetches the asset balance for a user by their user ID and vault token.
    * @param user_id - The ID of the user whose asset balance is to be fetched.
    * @param vault_token - The token used to authenticate with the vault.
@@ -86,8 +119,8 @@ export class WalletService {
     // log
     Logger.debug(`Fetching asset balance for user: ${user_id} with address: ${userPublicAddress}`);
 
-    const account: AssetHolding[] = await this.chainService.getAccountAssetHoldings(userPublicAddress)
-    return account
+    const account: AssetHolding[] = await this.chainService.getAccountAssetHoldings(userPublicAddress);
+    return account;
   }
 
   /**
@@ -134,6 +167,19 @@ export class WalletService {
     return signedTx;
   }
 
+  async signTxAsNamedManager(
+    manager_name: string,
+    tx: Uint8Array<ArrayBufferLike>,
+    vault_token: string,
+  ): Promise<Uint8Array<ArrayBufferLike>> {
+    const vaultRawSig: Buffer = await this.vaultService.signAsNamedManager(manager_name, tx, vault_token);
+    const signature = vaultRawSig.toString().split(':')[2];
+    const decoded: Buffer = Buffer.from(signature, 'base64');
+    const sig: Uint8Array = new Uint8Array(decoded);
+    const signedTx: Uint8Array<ArrayBufferLike> = this.chainService.addSignatureToTxn(tx, sig);
+    return signedTx;
+  }
+
   async createAsset(options: CreateAssetDto, vault_token: string) {
     const managerPublicKey: Buffer = await this.vaultService.getManagerPublicKey(vault_token);
     const managerPublicAddress: string = new AlgorandEncoder().encodeAddress(managerPublicKey);
@@ -145,9 +191,9 @@ export class WalletService {
   }
 
   /**
-   * 
+   *
    * Transfers Algos from one user to another.
-   * 
+   *
    * @param vault_token The token used to authenticate with the vault.
    * @param fromUserId The ID of the user sending the asset.
    * @param toAddress The address of the user receiving the asset.
@@ -155,8 +201,15 @@ export class WalletService {
    * @param lease An optional 32 byte lease encoded as base64.
    * @param note An optional transaction note.
    */
-  async transferAlgoToAddress(vault_token: string, fromUserId: string, toAddress: string, amount: number, lease?: string, note?: string) : Promise<string> {
-    let signedTx: Uint8Array
+  async transferAlgoToAddress(
+    vault_token: string,
+    fromUserId: string,
+    toAddress: string,
+    amount: number,
+    lease?: string,
+    note?: string,
+  ): Promise<string> {
+    let signedTx: Uint8Array;
     let fromAddress: string;
 
     try {
@@ -165,7 +218,7 @@ export class WalletService {
         fromAddress = new AlgorandEncoder().encodeAddress(managerPublicKey);
       } else {
         fromAddress = (await this.getUserInfo(fromUserId, vault_token)).public_address;
-      } 
+      }
     } catch (error) {
       throw new Error(`Failed to get from address for user ${fromUserId}: ${error.message}`);
     }
@@ -180,7 +233,6 @@ export class WalletService {
     );
 
     try {
-
       if (fromUserId === 'manager') {
         Logger.debug(`Signing transaction as manager: ${payTx.toString()}`);
         // sign as manager
@@ -191,7 +243,7 @@ export class WalletService {
       }
 
       // submit transaction
-      return (await this.chainService.submitTransaction(signedTx)).txid
+      return (await this.chainService.submitTransaction(signedTx)).txid;
     } catch (error) {
       throw new Error(`Failed to sign transaction as user ${fromUserId}: ${error.message}`);
     }
@@ -199,35 +251,42 @@ export class WalletService {
 
   /**
    * Transfers an asset from the manager to a user.
-  *
-  * The function first checks if the user has opted in for the asset. If not, an opt-in transaction is created.
-  * It then checks if the user has enough Algo balance to cover the minimum balance after the transactions.
-  * If not, a payment transaction is created to cover the difference.
-  * The function then crafts the necessary transactions, groups them, signs them, and submits them to the blockchain.
-  *
-  * @param assetId The ID of the asset to be transferred.
-  * @param userId The ID of the user receiving the asset.
-  * @param amount The amount of the asset to be transferred.
-  * @param lease An optional 32 byte lease encoded as base64.
-  * @param note An optional transaction note.
-  * @param vault_token The token used to authenticate with the vault.
-  * @returns The transaction ID of the submitted transaction.
-  */
- async transferAsset(vault_token: string, assetId: bigint, userId: string, amount: number, lease?: string, note?: string) {
-   const userPublicAddress: string = (await this.getUserInfo(userId, vault_token)).public_address;
-   const managerPublicKey: Buffer = await this.vaultService.getManagerPublicKey(vault_token);
-   const managerPublicAddress: string = new AlgorandEncoder().encodeAddress(managerPublicKey);
-   
-   let suggested_params = await this.chainService.getSuggestedParams();
-   
-   // check if user opted in for the asset
-   
-   let willOptInTx: boolean = false;
+   *
+   * The function first checks if the user has opted in for the asset. If not, an opt-in transaction is created.
+   * It then checks if the user has enough Algo balance to cover the minimum balance after the transactions.
+   * If not, a payment transaction is created to cover the difference.
+   * The function then crafts the necessary transactions, groups them, signs them, and submits them to the blockchain.
+   *
+   * @param assetId The ID of the asset to be transferred.
+   * @param userId The ID of the user receiving the asset.
+   * @param amount The amount of the asset to be transferred.
+   * @param lease An optional 32 byte lease encoded as base64.
+   * @param note An optional transaction note.
+   * @param vault_token The token used to authenticate with the vault.
+   * @returns The transaction ID of the submitted transaction.
+   */
+  async transferAsset(
+    vault_token: string,
+    assetId: bigint,
+    userId: string,
+    amount: number,
+    lease?: string,
+    note?: string,
+  ) {
+    const userPublicAddress: string = (await this.getUserInfo(userId, vault_token)).public_address;
+    const managerPublicKey: Buffer = await this.vaultService.getManagerPublicKey(vault_token);
+    const managerPublicAddress: string = new AlgorandEncoder().encodeAddress(managerPublicKey);
+
+    let suggested_params = await this.chainService.getSuggestedParams();
+
+    // check if user opted in for the asset
+
+    let willOptInTx: boolean = false;
     let account_asset = await this.chainService.getAccountAsset(userPublicAddress, assetId);
     if (account_asset == null) {
       willOptInTx = true;
     }
-    
+
     // check if user has enough algo balance to cover min balance after transactions
 
     let willPaymentTx: boolean = false;
@@ -308,7 +367,7 @@ export class WalletService {
     return (await this.chainService.submitTransaction(signedTxs)).txid;
   }
 
-    /**
+  /**
    * Claws back an asset from a user to the manager account.
    *
    * The function crafts the necessary transaction, signs it, and submits it to the blockchain.
@@ -319,7 +378,7 @@ export class WalletService {
    * @param lease An optional 32 byte lease encoded as base64.
    * @param note An optional transaction note.
    * @param vault_token The token used to authenticate with the vault.
-   * 
+   *
    * @returns The transaction ID of the submitted transaction.
    */
 
@@ -331,40 +390,160 @@ export class WalletService {
     lease?: string,
     note?: string,
   ) {
-    const userPublicAddress: string = (
-      await this.getUserInfo(userId, vault_token)
-    ).public_address;
-    const managerPublicKey: Buffer =
-      await this.vaultService.getManagerPublicKey(vault_token);
-    const managerPublicAddress: string = new AlgorandEncoder().encodeAddress(
-      managerPublicKey,
-    );
+    const userPublicAddress: string = (await this.getUserInfo(userId, vault_token)).public_address;
+    const managerPublicKey: Buffer = await this.vaultService.getManagerPublicKey(vault_token);
+    const managerPublicAddress: string = new AlgorandEncoder().encodeAddress(managerPublicKey);
 
     const suggested_params = await this.chainService.getSuggestedParams();
 
     // build unsigned tx
-    const tx: Uint8Array<ArrayBufferLike> =
-      await this.chainService.craftAssetClawbackTx(
-        managerPublicAddress,
-        userPublicAddress,
-        managerPublicAddress,
-        assetId,
-        amount,
-        lease,
-        note,
-        suggested_params,
-      );
+    const tx: Uint8Array<ArrayBufferLike> = await this.chainService.craftAssetClawbackTx(
+      managerPublicAddress,
+      userPublicAddress,
+      managerPublicAddress,
+      assetId,
+      amount,
+      lease,
+      note,
+      suggested_params,
+    );
 
     // sign tx by manager
 
-    const signedTx: Uint8Array<ArrayBufferLike> = await this.signTxAsManager(
-      tx,
-      vault_token,
-    );
-    const transactionId: string = (
-      await this.chainService.submitTransaction(signedTx)
-    ).txid;
+    const signedTx: Uint8Array<ArrayBufferLike> = await this.signTxAsManager(tx, vault_token);
+    const transactionId: string = (await this.chainService.submitTransaction(signedTx)).txid;
 
     return transactionId;
+  }
+
+  async sendGroup(vault_token: string, group: SendGroupDto): Promise<SendGroupResponseDto> {
+    const users: { id: string; public_address: string; type: 'user' | 'manager'; actual_address: string }[] = [];
+    for (let tx of group.transactions) {
+      const sender = tx.txn.sender;
+      const receiver = 'receiver' in tx.txn ? tx.txn.receiver : undefined;
+      const senderAddress = new AlgorandEncoder().encodeAddress(
+        sender.type === 'user'
+          ? await this.vaultService.getUserPublicKey(sender.id, vault_token)
+          : await this.vaultService.getNamedManagerPublicKey(sender.id, vault_token),
+      );
+      const receiverAddress = receiver
+        ? new AlgorandEncoder().encodeAddress(
+            receiver.type === 'user'
+              ? await this.vaultService.getUserPublicKey(receiver.id, vault_token)
+              : await this.vaultService.getNamedManagerPublicKey(receiver.id, vault_token),
+          )
+        : undefined;
+
+      users.push({
+        id: sender.id,
+        public_address: sender.public_address,
+        type: sender.type,
+        actual_address: senderAddress,
+      });
+      if (receiver) {
+        users.push({
+          id: receiver.id,
+          public_address: receiver.public_address,
+          type: receiver.type,
+          actual_address: receiverAddress,
+        });
+      }
+    }
+
+    const areUsersValid = users.every((user) => user.actual_address === user.public_address);
+    if (!areUsersValid) {
+      throw new Error('Invalid users');
+    }
+
+    const suggested_params = await this.chainService.getSuggestedParams();
+
+    const unSignedTxs = [];
+    for (let tx of group.transactions) {
+      if (tx.type === 'algo_transfer') {
+        const txn = tx.txn as AlgoTransferRequestDto;
+        let sp: TruncatedSuggestedParamsResponse = { ...suggested_params, minFee: tx.fee };
+        unSignedTxs.push(
+          await this.chainService.craftPaymentTx(
+            txn.sender.public_address,
+            txn.receiver.public_address,
+            txn.amount,
+            sp,
+          ),
+        );
+      } else if (tx.type === 'asset_transfer') {
+        const txn = tx.txn as AssetTransferRequestDto;
+        const algodClient = new algosdk.Algodv2(this.configService.get<string>('NODE_TOKEN'), this.configService.get<string>('NODE_HTTP_SCHEME') + "://" +this.configService.get<string>('NODE_HOST'), this.configService.get<string>('NODE_PORT'));
+        let sugp = await algodClient.getTransactionParams().do();
+        sugp.fee = BigInt(tx.fee);
+        sugp.flatFee = true;
+        const txnalgosdk = algosdk.makeAssetTransferTxnWithSuggestedParamsFromObject({
+          sender: txn.sender.public_address,
+          receiver: txn.receiver.public_address,
+          assetIndex: txn.assetId,
+          amount: txn.amount,
+          suggestedParams: sugp,
+        });
+        unSignedTxs.push(txnalgosdk.bytesToSign());
+        // let sp: TruncatedSuggestedParamsResponse = { ...suggested_params, minFee: tx.fee }; // TODO :: This snippet isn't working, gives At least one signature didn't pass verification error
+        // unSignedTxs.push(
+        //   await this.chainService.craftAssetTransferTx(
+        //     txn.sender.public_address,
+        //     txn.receiver.public_address,
+        //     txn.assetId,
+        //     txn.amount,
+        //     undefined,
+        //     undefined,
+        //     sp,
+        //   ),
+        // );
+      } else if (tx.type === 'create_asset') {
+        const txn = tx.txn as GroupCreateAssetDto;
+        let sp: TruncatedSuggestedParamsResponse = { ...suggested_params, minFee: tx.fee };
+        unSignedTxs.push(
+          await this.chainService.craftAssetCreateTx(
+            txn.sender.public_address,
+            {
+              total: txn.total,
+              decimals: txn.decimals,
+              defaultFrozen: txn.defaultFrozen,
+              unitName: txn.unitName,
+              assetName: txn.assetName,
+              url: txn.url,
+              managerAddress: txn.managerAddress,
+              reserveAddress: txn.reserveAddress,
+              freezeAddress: txn.freezeAddress,
+              clawbackAddress: txn.clawbackAddress,
+            },
+            sp,
+          ),
+        );
+      }
+    }
+
+    let unSignedGroupedTxns: Uint8Array<ArrayBufferLike>[] = this.chainService.setGroupID(unSignedTxs);
+
+    let signedTxs: Uint8Array[] = [];
+    let encodedTransactions: string[] = [];
+    for (var i = 0; i < unSignedGroupedTxns.length; i++) {
+      let tx = unSignedGroupedTxns[i];
+      const orgTx = group.transactions[i].txn;
+      let isUserTx: boolean = orgTx.sender.type === 'user';
+      let isManagerTx: boolean = orgTx.sender.type === 'manager';
+
+      if (isUserTx) {        
+        signedTxs.push(await this.signTxAsUser(orgTx.sender.id, tx, vault_token));
+      } else if (isManagerTx) {
+        signedTxs.push(await this.signTxAsNamedManager(orgTx.sender.id, tx, vault_token));
+      } else {
+        throw new Error('Invalid sender');
+      }
+      encodedTransactions.push(Buffer.from(tx).toString('base64'));
+    }
+    const txId = (await this.chainService.submitTransaction(signedTxs)).txid;
+
+    return {
+      transaction_id: txId,
+      signed_transactions: encodedTransactions,
+    };
   }
 }

@@ -357,6 +357,26 @@ async function getOrCreateManager(token: string){
   console.log("Manager public key: \n", publicKey)
 }
 
+async function getOrCreateNamedManager(token: string, managerKey: string, isExportable: boolean = false) {
+  const url: string = `${VAULT_BASE_URL}/v1/${VAULT_TRANSIT_MANAGERS_PATH}/keys/${managerKey}`;
+  const response = await axios.post(
+    url,
+    {
+      type: 'ed25519',
+      derived: false,
+      allow_deletion: false,
+      exportable: isExportable,
+    },
+    {
+      headers: { 'X-Vault-Token': token },
+    },
+  );
+  assert(response.status == 200);
+
+  const publicKey = new AlgorandEncoder().encodeAddress(Buffer.from(response.data.data.keys['1'].public_key, 'base64'));
+  console.log(`Named Manager [${managerKey}] public key: \n`, publicKey);
+}
+
 // Main function
 async function main() {
   let sealKeys: any;
@@ -384,7 +404,12 @@ async function main() {
   await logRoleIdAndSecretId(MANAGERS_APP_ROLE_NAME, sealKeys.root_token, MANAGERS_ROLE_AND_SECRET_KEYS_FILE);
   console.log("\n\n\nMANAGER ALGORAND PUBLIC ADDRESS\n------")
   await getOrCreateManager(sealKeys.root_token);
-
+  console.log('\n\n\nADMINISTRATOR ALGORAND PUBLIC ADDRESS\n------');
+  await getOrCreateNamedManager(sealKeys.root_token, 'admin', false);
+  console.log('\n\n\nOPERATIONAL ALGORAND PUBLIC ADDRESS\n------');
+  await getOrCreateNamedManager(sealKeys.root_token, 'operational', false);
+  console.log('\n\n\nONBOARDING ALGORAND PUBLIC ADDRESS\n------');
+  await getOrCreateNamedManager(sealKeys.root_token, 'onboarding', false);
 }
 
 // Run main function

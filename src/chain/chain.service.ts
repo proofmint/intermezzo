@@ -66,9 +66,10 @@ export class ChainService {
       freezeAddress?: string;
       clawbackAddress?: string;
     },
+    sp?: TruncatedSuggestedParamsResponse,
   ): Promise<Uint8Array> {
     let crafter = this.getCrafter();
-    let suggested_params: TruncatedSuggestedParamsResponse = await this.getSuggestedParams();
+    let suggested_params: TruncatedSuggestedParamsResponse = sp ? sp : await this.getSuggestedParams();
 
     let paramsBuilder = new AssetParamsBuilder();
     if (options.total) paramsBuilder.addTotal(options.total);
